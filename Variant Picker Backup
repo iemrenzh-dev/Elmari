@@ -1,0 +1,484 @@
+{% comment %}
+  Renders product variant-picker - PHASE 1 FINAL (Syntax & Animation Fix)
+  + bugfix pass: scoped radio names, symmetric availability filtering,
+    and a real stock check before enabling Add to Cart.
+{% endcomment %}
+
+<style>
+  /* 1. VISUAL REORDER */
+  variant-radios {
+    display: flex !important;
+    flex-direction: column !important;
+  }
+  .variant-input-wrapper.opt-is-color { order: -1; }
+
+  /* 1b. FORCE-SHOW THE OPTION LABEL
+     The theme's base CSS visually-hides <legend> elements by default
+     (a common accessibility pattern, since the native picker relies on
+     the swatches/buttons alone). This snippet's swatches use their own
+     custom classes so they're unaffected, but the "Colour: Red" /
+     "Size: M" legend inherits that hidden styling unless we undo it
+     here — that's why it wasn't appearing at all. */
+  .variant-input-wrapper > legend.form__label {
+    position: static !important;
+    width: auto !important;
+    height: auto !important;
+    margin: 0 0 0.6rem !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    clip: auto !important;
+    clip-path: none !important;
+    white-space: normal !important;
+    display: block !important;
+    font-size: 1.3rem;
+    font-weight: 500;
+  }
+
+  /* 2. PREMIUM SMOOTH ANIMATION */
+  .color__swatch {
+    width: 26px !important;
+    height: 26px !important;
+    border-radius: 50% !important;
+    clip-path: none !important;
+    -webkit-clip-path: none !important;
+    mask: none !important;
+    -webkit-mask: none !important;
+    mask-image: none !important;
+    -webkit-mask-image: none !important;
+    transform: none !important;
+    /* Spring-loaded smooth transition */
+    transition: 
+      transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275), 
+      box-shadow 0.4s ease, 
+      margin 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) !important;
+    position: relative;
+    overflow: visible !important;
+    cursor: pointer;
+    z-index: 1;
+    border: 1px solid #ccc !important;
+  }
+
+  /* ACTIVE STATE: Halo + Enlarged */
+  .variant-input-wrapper input:checked + label.color__swatch {
+    box-shadow: 0 0 0 2px #fff, 0 0 0 3px #d1d1d1 !important;
+    transform: scale(1.25) !important;
+    margin: 0 8px !important;
+    z-index: 10 !important;
+    border-color: transparent !important;
+  }
+
+  /* ACTIVE STATE for non-swatch options (size, etc.) — filled, high
+     contrast, and self-contained so it can't collide with (or depend on)
+     whatever the theme does for a checked radio + label pairing. This is
+     what fixes the "selected size number turns invisible" issue: we no
+     longer inherit an ambiguous text colour from elsewhere. */
+  .variant-input-wrapper input:checked + label:not(.color__swatch) {
+    background-color: #111 !important;
+    border-color: #111 !important;
+    color: #fff !important;
+    font-weight: 600;
+  }
+
+  /* 3. CLEAN DESIGN (Kill Theme Diamonds) */
+  .variant-input-wrapper label::before,
+  .variant-input-wrapper label::after {
+    display: none !important;
+    content: none !important;
+  }
+
+  .variant-input-wrapper label.state-oos {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
+
+  .variant-input-wrapper input:disabled + label {
+    pointer-events: none;
+    clip-path: none !important;
+    -webkit-clip-path: none !important;
+    mask: none !important;
+    -webkit-mask: none !important;
+    mask-image: none !important;
+    -webkit-mask-image: none !important;
+  }
+
+  .variant-input-wrapper input:disabled + label.color__swatch {
+    border-radius: 50% !important;
+    transform: none !important;
+  }
+
+  .variant-input-wrapper label:not(.color__swatch).state-oos {
+    text-decoration: line-through;
+  }
+
+  /* Custom Slash for Swatches only */
+  .variant-input-wrapper .color__swatch.state-oos::after {
+    display: block !important;
+    content: "" !important;
+    position: absolute !important;
+    top: 50% !important;
+    left: -10% !important;
+    width: 120% !important;
+    height: 1.5px !important;
+    background: #555 !important;
+    transform: rotate(-45deg) !important;
+    z-index: 5 !important;
+    pointer-events: none !important;
+  }
+</style>
+
+{%- unless product.has_only_default_variant -%}
+  {%- if block.settings.picker_type == 'button' -%}
+    <variant-radios
+      id="v-radios-{{ section.id }}"
+      class="no-js-hidden"
+      data-section="{{ section.id }}"
+      data-url="{{ product.url }}"
+      {{ block.shopify_attributes }}
+    >
+      {%- for option in product.options_with_values -%}
+        {%- assign is_color = false -%}
+        {%- assign is_size = false -%}
+        {%- assign dn_name = option.name | downcase -%}
+        {%- if dn_name contains 'color' or dn_name contains 'colour' -%}
+          {%- assign is_color = true -%}
+        {%- endif -%}
+        {%- if dn_name contains 'size' -%}
+          {%- assign is_size = true -%}
+        {%- endif -%}
+        {%- assign opt_index = forloop.index0 -%}
+
+        <fieldset class="js product-form__input variant-input-wrapper{% if is_color %} opt-is-color{% endif %}" data-index="{{ opt_index }}" data-is-size="{{ is_size }}" data-option-name="{{ option.name | handle }}">
+          <legend class="form__label">{{ option.name }}: <span class="js-label-text"></span></legend>
+
+          {%- for value in option.values -%}
+            {%- assign available_in_stock = false -%}
+            {%- for variant in product.variants -%}
+              {%- if variant.options[opt_index] == value and variant.available -%}
+                {%- assign available_in_stock = true -%}
+                {%- break -%}
+              {%- endif -%}
+            {%- endfor -%}
+
+            <input
+              type="radio"
+              id="{{ section.id }}-{{ option.name }}-{{ forloop.index0 }}"
+              name="{{ option.name }}-{{ section.id }}"
+              value="{{ value | escape }}"
+              data-value-handle="{{ value | handle }}"
+              form="{{ product_form_id }}"
+              {% unless available_in_stock %}disabled{% endunless %}
+            >
+            {%- if is_color -%}
+              {%- assign color_file = value | handle | append: '.png' -%}
+              {%- assign fallback = value | split: ' ' | last | handle -%}
+              <label for="{{ section.id }}-{{ option.name }}-{{ forloop.index0 }}" 
+                     class="color__swatch {% unless available_in_stock %}state-oos{% endunless %}" 
+                     style="background-color: {{ fallback }} !important; {% if images[color_file] != blank %}background-image: url({{ color_file | file_img_url: '50x50' }}) !important;{% endif %}"
+                     title="{{ value }}"
+              ></label>
+            {%- else -%}
+              <label for="{{ section.id }}-{{ option.name }}-{{ forloop.index0 }}" class="{% unless available_in_stock %}state-oos{% endunless %}">
+                {{ value }}
+              </label>
+            {%- endif -%}
+          {%- endfor -%}
+        </fieldset>
+      {%- endfor -%}
+
+      <script type="application/json" id="V-Data-{{ section.id }}">
+        {{ product.variants | json }}
+      </script>
+    </variant-radios>
+  {%- endif -%}
+{%- endunless -%}
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  const root = document.querySelector('#v-radios-{{ section.id }}');
+  if (!root) return;
+
+  const variants = JSON.parse(document.getElementById('V-Data-{{ section.id }}').textContent);
+  const fieldsets = Array.from(root.querySelectorAll('.variant-input-wrapper'));
+  const btn = document.querySelector('[name="add"]');
+
+  const SIZE_ORDER = [
+    'xxxs', 'xxs', 'xs', 'xxs/xs', 'xs/s', 's', 's/m', 'm', 'm/l', 'l',
+    'l/xl', 'xl', 'xl/xxl', 'xxl', 'xxl/xxxl', 'xxxl', '2xl', '3xl', '4xl', '5xl',
+    'one size', 'os', 'o/s'
+  ];
+  function sizeSortKey(raw) {
+    const v = raw.trim().toLowerCase();
+    if (/^\d+(\.\d+)?$/.test(v)) return [0, parseFloat(v), v];
+    const idx = SIZE_ORDER.indexOf(v);
+    if (idx !== -1) return [1, idx, v];
+    return [2, 0, v];
+  }
+  function sizeCompare(a, b) {
+    const ka = sizeSortKey(a), kb = sizeSortKey(b);
+    if (ka[0] !== kb[0]) return ka[0] - kb[0];
+    if (ka[0] === 2) return ka[2] < kb[2] ? -1 : ka[2] > kb[2] ? 1 : 0;
+    return ka[1] - kb[1];
+  }
+  fieldsets.forEach(fs => {
+    if (fs.dataset.isSize !== 'true') return;
+    const pairs = Array.from(fs.querySelectorAll('input')).map(input => ({
+      input, label: input.nextElementSibling
+    }));
+    pairs.sort((a, b) => sizeCompare(a.input.value, b.input.value));
+    pairs.forEach(({ input, label }) => {
+      fs.appendChild(input);
+      fs.appendChild(label);
+    });
+  });
+
+  const FASHION_COLOR_FALLBACKS = {
+    rosa: '#d9a5a0', caramel: '#af6e4d', strawberry: '#c8102e',
+    khaki: '#c3b091', rust: '#8a3324', sand: '#c2b280', stone: '#a89f91',
+    charcoal: '#36454f', blush: '#de5d83', mocha: '#8b5a44', ivory: '#fffff0'
+  };
+  function isValidCssColor(str) {
+    const probe = new Option().style;
+    probe.color = '';
+    probe.color = str;
+    return probe.color !== '';
+  }
+  root.querySelectorAll('.color__swatch').forEach(label => {
+    const current = label.style.backgroundColor;
+    if (current && !isValidCssColor(current)) {
+      const key = current.trim().toLowerCase();
+      label.style.setProperty('background-color', FASHION_COLOR_FALLBACKS[key] || '#cccccc', 'important');
+    }
+  });
+
+  if (!window.location.search.includes('variant=')) {
+    root.querySelectorAll('input').forEach(i => { i.checked = false; });
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = 'Select Options';
+    }
+  }
+
+  const idxOf = fs => parseInt(fs.dataset.index, 10);
+  const checkedValue = fs => fs.querySelector('input:checked')?.value;
+
+  function existsFor(fs, value) {
+    const idx = idxOf(fs);
+    const isColorFieldset = fs.classList.contains('opt-is-color');
+    return variants.some(v => {
+      if (v.options[idx] !== value || !v.available) return false;
+      if (isColorFieldset) return true;
+      return fieldsets.every(other => {
+        if (other === fs) return true;
+        const otherVal = checkedValue(other);
+        if (!otherVal) return true;
+        return v.options[idxOf(other)] === otherVal;
+      });
+    });
+  }
+
+  function markAvailability() {
+    fieldsets.forEach(fs => {
+      fs.querySelectorAll('input').forEach(input => {
+        const available = existsFor(fs, input.value);
+        input.nextElementSibling.classList.toggle('state-oos', !available);
+        input.disabled = !available;
+      });
+    });
+  }
+
+  const ONE_SIZE_VALUES = ['one size', 'os', 'o/s'];
+  function pickFallbackSize(inputs) {
+    const oneSize = inputs.find(i => ONE_SIZE_VALUES.includes(i.value.trim().toLowerCase()));
+    return oneSize || inputs[0];
+  }
+
+  function autoSelectSingleColor() {
+    fieldsets.forEach(fs => {
+      if (!fs.classList.contains('opt-is-color')) return;
+      if (fs.querySelector('input:checked')) return;
+      const inputs = Array.from(fs.querySelectorAll('input'));
+      // Only one colour on this product — pre-select it instead of
+      // forcing the customer to click a swatch that has no alternative.
+      if (inputs.length === 1) {
+        inputs[0].checked = true;
+      }
+    });
+  }
+  autoSelectSingleColor();
+
+  function autoSelectDefaultSize() {
+    fieldsets.forEach(fs => {
+      if (fs.classList.contains('opt-is-color')) return;
+      if (fs.querySelector('input:checked')) return;
+      const inputs = Array.from(fs.querySelectorAll('input'));
+
+      const oneSize = inputs.find(i => ONE_SIZE_VALUES.includes(i.value.trim().toLowerCase()));
+      if (oneSize) { oneSize.checked = true; return; }
+
+      const firstActive = inputs.find(i => existsFor(fs, i.value));
+      if (firstActive) { firstActive.checked = true; return; }
+      const fallback = pickFallbackSize(inputs);
+      if (fallback) fallback.checked = true;
+    });
+  }
+  autoSelectDefaultSize();
+
+  function findPreviewVariant(selections) {
+    const colorFs = fieldsets.find(fs => fs.classList.contains('opt-is-color'));
+    if (!colorFs) return null;
+    const colorValue = checkedValue(colorFs);
+    if (!colorValue) return null;
+    const colorIdx = idxOf(colorFs);
+
+    const hasPhoto = v => v.featured_media || v.featured_image;
+    return variants.find(v => v.options[colorIdx] === colorValue && hasPhoto(v)) || null;
+  }
+
+  function clientHandle(str) {
+    return (str || '')
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+  }
+
+  function findGangSlide(gallery, selections) {
+    const colorFs = fieldsets.find(fs => fs.classList.contains('opt-is-color'));
+    const ordered = colorFs ? [colorFs, ...fieldsets.filter(fs => fs !== colorFs)] : fieldsets;
+
+    for (const fs of ordered) {
+      const i = fieldsets.indexOf(fs);
+      const val = selections[i];
+      if (!val) continue;
+      const optionHandle = fs.dataset.optionName || clientHandle(fs.querySelector('legend')?.childNodes[0]?.textContent);
+      const valueHandle = clientHandle(val);
+      const connect = `${optionHandle}_${valueHandle}`;
+      const slide = gallery.querySelector(`[data-gang-connect="${connect}"]`);
+      if (slide) return slide;
+    }
+    return null;
+  }
+
+  function forceLoadSlideImage(gallery, mediaId) {
+    const slide = gallery.querySelector(`[data-media-id="${mediaId}"]`);
+    if (!slide) return;
+    slide.querySelectorAll('img[loading="lazy"]').forEach(img => {
+      img.loading = 'eager';
+      if (img.dataset.src && !img.src) img.src = img.dataset.src;
+    });
+  }
+
+  function syncGalleryImage(selections) {
+    const sectionId = root.dataset.section;
+    const gallery = document.querySelector(`media-gallery#MediaGallery-${sectionId}`);
+    if (!gallery || typeof gallery.setActiveMedia !== 'function') {
+      return;
+    }
+
+    const variant = findPreviewVariant(selections);
+    const photo = variant && (variant.featured_media || variant.featured_image);
+    if (photo) {
+      const mediaId = `${sectionId}-${photo.id}`;
+      const slide = gallery.querySelector(`[data-media-id="${mediaId}"]`);
+      if (slide) {
+        forceLoadSlideImage(gallery, mediaId);
+        requestAnimationFrame(() => {
+          try { gallery.setActiveMedia(mediaId, false, false); }
+          catch (err) { }
+        });
+        return;
+      }
+    }
+
+    const gangSlide = findGangSlide(gallery, selections);
+    if (gangSlide) {
+      const mediaId = gangSlide.dataset.mediaId;
+      forceLoadSlideImage(gallery, mediaId);
+      requestAnimationFrame(() => {
+        try { gallery.setActiveMedia(mediaId, false, false); }
+        catch (err) { }
+      });
+      return;
+    }
+  }
+
+  // UPDATED LOGIC: Event dispatching & strict fallback prioritization
+  function autoSelectSizeForColor(sourceFs) {
+    if (!sourceFs || !sourceFs.classList.contains('opt-is-color')) return;
+    const colorValue = checkedValue(sourceFs);
+    const colorIdx = idxOf(sourceFs);
+
+    fieldsets.forEach(fs => {
+      if (fs === sourceFs || fs.classList.contains('opt-is-color')) return;
+      const current = fs.querySelector('input:checked');
+      const inputs = Array.from(fs.querySelectorAll('input'));
+
+      const availableInputs = inputs.filter(i => existsFor(fs, i.value));
+      const best = availableInputs.find(i => ONE_SIZE_VALUES.includes(i.value.trim().toLowerCase()))
+        || availableInputs[0];
+        
+      if (best) {
+        if (current !== best) {
+          if (current) current.checked = false;
+          best.checked = true;
+          // IMPORTANT: Tell the theme JS that we changed the size to a valid combination!
+          best.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        return;
+      }
+
+      // UPDATED FALLBACK: Filter the actual real sizes for this color, and forcefully prefer One Size
+      const realOptionsForThisColor = inputs.filter(i =>
+        variants.some(v => v.options[idxOf(fs)] === i.value && v.options[colorIdx] === colorValue)
+      );
+      
+      const fallback = realOptionsForThisColor.find(i => ONE_SIZE_VALUES.includes(i.value.trim().toLowerCase())) 
+        || realOptionsForThisColor[0] 
+        || pickFallbackSize(inputs);
+        
+      if (fallback && fallback !== current) {
+        if (current) current.checked = false;
+        fallback.checked = true;
+        // IMPORTANT: Tell the theme JS for the fallback update too
+        fallback.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    });
+  }
+
+  function update(sourceFs) {
+    markAvailability();
+    autoSelectSizeForColor(sourceFs);
+
+    fieldsets.forEach(fs => {
+      const span = fs.querySelector('.js-label-text');
+      if (span) span.textContent = checkedValue(fs) || '';
+    });
+
+    const selections = fieldsets.map(checkedValue);
+    const allPicked = selections.every(Boolean);
+    const matchingVariant = allPicked
+      ? variants.find(v => fieldsets.every((fs, i) => v.options[idxOf(fs)] === selections[i]))
+      : null;
+
+    syncGalleryImage(selections);
+
+    if (btn) {
+      if (matchingVariant && matchingVariant.available) {
+        btn.disabled = false;
+        btn.textContent = 'Add to Cart';
+      } else if (allPicked) {
+        btn.disabled = true;
+        btn.textContent = 'Sold Out';
+      } else {
+        btn.disabled = true;
+        btn.textContent = 'Select Options';
+      }
+    }
+  }
+
+  root.addEventListener('change', (e) => {
+    update(e.target.closest('.variant-input-wrapper'));
+  });
+  update();
+});
+</script>
