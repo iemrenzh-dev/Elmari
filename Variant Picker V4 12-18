@@ -1,0 +1,751 @@
+{% comment %}
+  Unified Variant Picker + Size Guide Drawer + Smart Upsells (UNIQUE ID FIX)
+  - Fixed 'X' close button and Upsells breaking due to duplicate hidden DOM elements.
+  - Appended {{ section.id }} to all Drawer and Upsell elements so they never conflict.
+  - Colour swatches are hidden when every size of that colour is sold out. The rule is evaluated
+    from live variant availability on every page load, so a colour reappears on the next page load
+    once any of its sizes becomes available again. Sizes are never hidden. No inventory, variant or
+    publication data is changed.
+{% endcomment %}
+
+{%- comment -%}
+  Colour hiding rule switch.
+  false (default) = a colour is hidden when none of its variants can be bought online (variant.available).
+                    This follows the "Continue selling when out of stock" setting: a variant that continues
+                    selling at zero stock counts as available, so its colour stays visible.
+  true            = also treat a tracked variant with 0 (or negative) quantity as sold out even when
+                    "Continue selling when out of stock" is on. Hidden colours can still be bought by direct
+                    link in that case.
+{%- endcomment -%}
+{%- assign hide_colour_by_quantity = false -%}
+
+<!-- ========================================== -->
+<!-- 1. UNIFIED CSS STYLES                      -->
+<!-- ========================================== -->
+<style>
+  /* --- VARIANT PICKER STYLES --- */
+  variant-radios { display: flex !important; flex-direction: column !important; }
+  .variant-input-wrapper.opt-is-color { order: -1; }
+  .variant-input-wrapper > legend.form__label {
+    position: static !important; width: auto !important; height: auto !important;
+    margin: 0 0 0.6rem !important; padding: 0 !important; overflow: visible !important;
+    clip: auto !important; clip-path: none !important; white-space: normal !important;
+    display: block !important; font-size: 1.3rem; font-weight: 500;
+  }
+  .color__swatch {
+    width: 26px !important; height: 26px !important; border-radius: 50% !important;
+    clip-path: none !important; -webkit-clip-path: none !important;
+    mask: none !important; -webkit-mask: none !important;
+    transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275), box-shadow 0.4s ease, margin 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) !important;
+    position: relative; overflow: visible !important; cursor: pointer; z-index: 1; border: 1px solid #ccc !important;
+  }
+  .variant-input-wrapper input:checked + label.color__swatch {
+    box-shadow: 0 0 0 2px #fff, 0 0 0 3px #d1d1d1 !important; transform: scale(1.25) !important;
+    margin: 0 8px !important; z-index: 10 !important; border-color: transparent !important;
+  }
+  .variant-input-wrapper input:checked + label:not(.color__swatch) {
+    background-color: #111 !important; border-color: #111 !important; color: #fff !important; font-weight: 600;
+  }
+  .variant-input-wrapper label::before, .variant-input-wrapper label::after { display: none !important; content: none !important; }
+  .variant-input-wrapper label.state-oos { opacity: 0.3; cursor: not-allowed; }
+  .variant-input-wrapper input:disabled + label { pointer-events: none; }
+  .variant-input-wrapper input:disabled + label.color__swatch { border-radius: 50% !important; transform: none !important; }
+  .variant-input-wrapper label:not(.color__swatch).state-oos {
+    display: none !important;
+  }
+  .variant-input-wrapper .color__swatch.state-oos::after {
+    display: block !important; content: "" !important; position: absolute !important; top: 50% !important;
+    left: -10% !important; width: 120% !important; height: 1.5px !important; background: #555 !important;
+    transform: rotate(-45deg) !important; z-index: 5 !important; pointer-events: none !important;
+  }
+  .size-guide-trigger {
+    display: inline-flex; align-items: center; gap: 5px; background: none; border: none; box-shadow: none;
+    padding: 8px 12px; margin-left: 5px; cursor: pointer; font-size: 1.2rem; font-weight: 400; color: #043254;
+    text-decoration: underline; text-underline-offset: 3px; font-family: inherit; transition: opacity 0.2s ease;
+  }
+  .size-guide-trigger:hover { opacity: 0.7; }
+
+  /* --- SIZE GUIDE DRAWER STYLES --- */
+  .custom-drawer-overlay {
+    position: fixed !important; top: 0 !important; left: 0 !important; width: 100vw !important; height: 100vh !important;
+    background: rgba(0, 0, 0, 0.6) !important; backdrop-filter: blur(5px) !important; -webkit-backdrop-filter: blur(5px) !important;
+    z-index: 2147483646 !important; opacity: 0; visibility: hidden; transition: all 0.3s ease;
+  }
+  .custom-drawer-overlay.is-open { opacity: 1 !important; visibility: visible !important; }
+  .custom-size-drawer {
+    position: fixed !important; top: 0 !important; right: -100%; width: 100%; max-width: 450px; height: 100vh !important;
+    background: #ffffff !important; z-index: 2147483647 !important; box-shadow: -5px 0 20px rgba(0, 0, 0, 0.2) !important;
+    transition: right 0.3s ease; display: flex; flex-direction: column; overflow-y: auto; font-family: inherit;
+  }
+  .custom-size-drawer.is-open { right: 0 !important; }
+  .custom-size-drawer__header {
+    display: flex; justify-content: space-between; align-items: center; padding: 15px 20px;
+    border-bottom: 1px solid #eaeaea; position: sticky; top: 0; background: #ffffff; z-index: 2;
+  }
+  .custom-size-drawer__title-wrap { display: flex; align-items: center; gap: 10px; }
+  .custom-size-drawer__title { margin: 0; font-size: 1.2rem; font-weight: 500; color: #043254; letter-spacing: 0.5px; }
+  .custom-size-drawer__close { background: transparent; border: none; cursor: pointer; padding: 5px; display: flex; }
+  .custom-size-drawer__close:hover { opacity: 0.7; }
+  .custom-size-drawer__content { padding: 20px; }
+  .custom-size-drawer__product-box { background-color: #FAF5F0; padding: 15px 20px; border-radius: 8px; margin-bottom: 15px; }
+  .custom-size-drawer__product-box h4 { margin: 0 0 8px 0; font-size: 1.05rem; color: #043254; font-weight: 600; }
+  .custom-size-drawer__product-box p { margin: 0; font-size: 0.9rem; color: #043254; line-height: 1.3; }
+  .custom-size-drawer__zoom-hint { text-align: center; font-size: 0.85rem; color: #666; margin-bottom: 15px; display: flex; align-items: center; justify-content: center; gap: 5px; }
+  .zoom-image-container { position: relative; overflow: hidden; cursor: zoom-in; touch-action: none; border-radius: 4px; }
+  .zoom-image { width: 100%; height: auto; display: block; transition: transform 0.2s ease; transform-origin: center center; }
+  .zoom-image.is-zoomed { transform: scale(2.5); cursor: zoom-out; }
+  .custom-size-drawer__help { margin-top: 40px; margin-bottom: 20px; text-align: center; }
+  .help-title { color: #043254; font-size: 1.1rem; font-weight: 500; margin-bottom: 20px; text-align: center; }
+  .help-icons-row { display: flex; justify-content: center; gap: 40px; }
+  .help-link { display: flex; flex-direction: column; align-items: center; text-decoration: none; color: #043254; transition: opacity 0.2s; }
+  .help-link:hover { opacity: 0.7; }
+  .help-link svg { width: 32px; height: 32px; margin-bottom: 8px; }
+  .help-link span { font-size: 0.95rem; font-weight: 400; }
+  
+  /* UPSELL STYLES */
+  .drawer-upsell-section { border-top: 1px solid #eaeaea; margin-top: 30px; padding-top: 10px; }
+  .drawer-upsell-list { display: flex; flex-direction: column; gap: 15px; }
+  .drawer-upsell-item { display: flex; gap: 15px; align-items: center; background: #fdfdfd; border: 1px solid #eaeaea; padding: 10px; border-radius: 8px; text-decoration: none; color: inherit; transition: border 0.2s; }
+  .drawer-upsell-item:hover { border-color: #043254; }
+  .drawer-upsell-img { width: 60px; height: 80px; object-fit: cover; border-radius: 4px; background: #f4f4f4; }
+  .drawer-upsell-info { flex: 1; display: flex; flex-direction: column; gap: 5px; }
+  .drawer-upsell-info h5 { margin: 0; font-size: 0.95rem; color: #043254; font-weight: 500; line-height: 1.2; }
+  .drawer-upsell-btn { align-self: flex-start; font-size: 0.8rem; background: #043254; color: #fff; padding: 4px 10px; border-radius: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+</style>
+
+<!-- ========================================== -->
+<!-- 2. VARIANT PICKER HTML                     -->
+<!-- ========================================== -->
+{%- unless product.has_only_default_variant -%}
+  {%- if block.settings.picker_type == 'button' -%}
+    <variant-radios
+      id="v-radios-{{ section.id }}"
+      class="no-js-hidden"
+      data-section="{{ section.id }}"
+      data-url="{{ product.url }}"
+      {{ block.shopify_attributes }}
+    >
+      {%- for option in product.options_with_values -%}
+        {%- assign is_color = false -%}
+        {%- assign is_size = false -%}
+        {%- assign dn_name = option.name | downcase -%}
+        {%- if dn_name contains 'color' or dn_name contains 'colour' -%}
+          {%- assign is_color = true -%}
+        {%- endif -%}
+        {%- if dn_name contains 'size' -%}
+          {%- assign is_size = true -%}
+        {%- endif -%}
+        {%- assign opt_index = forloop.index0 -%}
+
+        {%- comment -%}
+          COLOUR HIDING PRE-PASS (colour option only).
+          A colour counts as in stock when at least one of its variants (any size) can be bought online.
+          colour_in_stock_list holds the in-stock colours as "|Colour A|Colour B|".
+          If no colour at all is in stock the whole product is sold out, so nothing is hidden and the
+          swatches render exactly as before (struck through / disabled).
+        {%- endcomment -%}
+        {%- assign colour_in_stock_list = '|' -%}
+        {%- assign any_colour_in_stock = false -%}
+        {%- if is_color -%}
+          {%- for value in option.values -%}
+            {%- assign colour_value_in_stock = false -%}
+            {%- for variant in product.variants -%}
+              {%- if variant.options[opt_index] == value and variant.available -%}
+                {%- if hide_colour_by_quantity and variant.inventory_management and variant.inventory_quantity <= 0 -%}
+                  {%- continue -%}
+                {%- endif -%}
+                {%- assign colour_value_in_stock = true -%}
+                {%- break -%}
+              {%- endif -%}
+            {%- endfor -%}
+            {%- if colour_value_in_stock -%}
+              {%- assign colour_in_stock_list = colour_in_stock_list | append: value | append: '|' -%}
+              {%- assign any_colour_in_stock = true -%}
+            {%- endif -%}
+          {%- endfor -%}
+        {%- endif -%}
+
+        <fieldset class="js product-form__input variant-input-wrapper{% if is_color %} opt-is-color{% endif %}" data-index="{{ opt_index }}" data-is-size="{{ is_size }}" data-option-name="{{ option.name | handle }}">
+          <legend class="form__label">{{ option.name }}: <span class="js-label-text"></span></legend>
+
+          {%- for value in option.values -%}
+            {%- assign hide_this_colour = false -%}
+            {%- if is_color and any_colour_in_stock -%}
+              {%- assign colour_needle = '|' | append: value | append: '|' -%}
+              {%- unless colour_in_stock_list contains colour_needle -%}
+                {%- assign hide_this_colour = true -%}
+              {%- endunless -%}
+            {%- endif -%}
+
+            {%- unless hide_this_colour -%}
+              {%- assign available_in_stock = false -%}
+              {%- for variant in product.variants -%}
+                {%- if variant.options[opt_index] == value and variant.available -%}
+                  {%- assign available_in_stock = true -%}
+                  {%- break -%}
+                {%- endif -%}
+              {%- endfor -%}
+
+              <input
+                type="radio"
+                id="{{ section.id }}-{{ option.name }}-{{ forloop.index0 }}"
+                name="{{ option.name }}-{{ section.id }}"
+                value="{{ value | escape }}"
+                data-value-handle="{{ value | handle }}"
+                form="{{ product_form_id }}"
+                {% unless available_in_stock %}disabled{% endunless %}
+              >
+              {%- if is_color -%}
+                {%- assign color_file = value | handle | append: '.png' -%}
+                {%- assign fallback = value | split: ' ' | last | handle -%}
+                <label for="{{ section.id }}-{{ option.name }}-{{ forloop.index0 }}" 
+                       class="color__swatch {% unless available_in_stock %}state-oos{% endunless %}" 
+                       style="background-color: {{ fallback }} !important; {% if images[color_file] != blank %}background-image: url({{ color_file | file_img_url: '50x50' }}) !important;{% endif %}"
+                       title="{{ value }}"
+                ></label>
+              {%- else -%}
+                <label for="{{ section.id }}-{{ option.name }}-{{ forloop.index0 }}" class="{% unless available_in_stock %}state-oos{% endunless %}">
+                  {{ value }}
+                </label>
+              {%- endif -%}
+            {%- endunless -%}
+          {%- endfor -%}
+
+          {%- comment -%} APPEND SIZE GUIDE TRIGGER AFTER SIZES {%- endcomment -%}
+          {%- if is_size and product.metafields.custom.size_chart -%}
+            <button type="button" class="size-guide-trigger" onclick="event.preventDefault(); window.openSizeChartDrawer('{{ section.id }}');">
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21.17 6.83a4 4 0 0 0-5.66 0L4 18.34a4 4 0 0 0 5.66 5.66l11.51-11.51a4 4 0 0 0 0-5.66z"></path>
+                <line x1="17.66" y1="10.34" x2="19.07" y2="11.76"></line>
+                <line x1="14.83" y1="13.17" x2="16.24" y2="14.59"></line>
+                <line x1="12" y1="16" x2="13.41" y2="17.41"></line>
+                <line x1="9.17" y1="18.83" x2="10.59" y2="20.24"></line>
+              </svg>
+              <span>Size guide</span>
+            </button>
+          {%- endif -%}
+
+        </fieldset>
+      {%- endfor -%}
+
+      <script type="application/json" id="V-Data-{{ section.id }}">
+        {{ product.variants | json }}
+      </script>
+    </variant-radios>
+  {%- endif -%}
+{%- endunless -%}
+
+
+<!-- ========================================== -->
+<!-- 3. SIZE GUIDE DRAWER HTML (Unique IDs)     -->
+<!-- ========================================== -->
+{% if product.metafields.custom.size_chart %}
+  <div id="SizeChartOverlay-{{ section.id }}" class="custom-drawer-overlay" onclick="window.closeSizeChartDrawer('{{ section.id }}')"></div>
+  <div id="SizeChartDrawer-{{ section.id }}" class="custom-size-drawer">
+    
+    <div class="custom-size-drawer__header">
+      <div class="custom-size-drawer__title-wrap">
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#043254" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21.17 6.83a4 4 0 0 0-5.66 0L4 18.34a4 4 0 0 0 5.66 5.66l11.51-11.51a4 4 0 0 0 0-5.66z"></path>
+          <line x1="17.66" y1="10.34" x2="19.07" y2="11.76"></line>
+          <line x1="14.83" y1="13.17" x2="16.24" y2="14.59"></line>
+          <line x1="12" y1="16" x2="13.41" y2="17.41"></line>
+          <line x1="9.17" y1="18.83" x2="10.59" y2="20.24"></line>
+        </svg>
+        <h3 class="custom-size-drawer__title">SIZE GUIDE</h3>
+      </div>
+      <button type="button" class="custom-size-drawer__close" onclick="window.closeSizeChartDrawer('{{ section.id }}')">
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="#043254" stroke-width="1.5"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+      </button>
+    </div>
+    
+    <div class="custom-size-drawer__content rte">
+      <div class="custom-size-drawer__product-box">
+        <h4>{{ product.title | upcase }}</h4>
+        <p>True to size. Refer to size guide for specific size recommendations.</p>
+      </div>
+
+      <p class="custom-size-drawer__zoom-hint">
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line><line x1="11" y1="8" x2="11" y2="14"></line><line x1="8" y1="11" x2="14" y2="11"></line></svg>
+        Hover or touch to zoom
+      </p>
+
+      <div class="zoom-image-container" id="ZoomContainer-{{ section.id }}">
+        <img src="{{ product.metafields.custom.size_chart | image_url }}" class="zoom-image" id="ZoomImage-{{ section.id }}" alt="Size Guide">
+      </div>
+
+      {% for collection in product.collections %}
+        {% if collection.handle == 'bella-carina' %}
+          <p style="margin-top: 15px; font-size: 0.85em; line-height: 1.4; color: #555;">
+            *Measurements are taken flat and may vary slightly due to fabric stretch, manufacturing processes, and garment style.
+          </p>
+        {% endif %}
+      {% endfor %}
+
+      <!-- SMART UPSELL SECTION (Unique IDs) -->
+      <div id="DrawerUpsellContainer-{{ section.id }}" class="drawer-upsell-section" style="display: none;" data-product-id="{{ product.id }}" data-product-title="{{ product.title | escape }}">
+        <p class="help-title" style="margin-top: 30px;">You Might Also Like</p>
+        <div id="DrawerUpsellList-{{ section.id }}" class="drawer-upsell-list"></div>
+      </div>
+
+      <!-- HELP ICONS -->
+      <div class="custom-size-drawer__help">
+        <p class="help-title">Need help with sizing?</p>
+        <div class="help-icons-row">
+          <a href="#" class="help-link">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#043254" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path><circle cx="8" cy="11" r="1" fill="#043254" stroke="none"></circle><circle cx="12" cy="11" r="1" fill="#043254" stroke="none"></circle><circle cx="16" cy="11" r="1" fill="#043254" stroke="none"></circle></svg>
+            <span>Chat</span>
+          </a>
+          <a href="mailto:support@yourstore.com" class="help-link">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#043254" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>
+            <span>Email</span>
+          </a>
+          <a href="tel:+1234567890" class="help-link">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#043254" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
+            <span>Call</span>
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
+{% endif %}
+
+
+<!-- ========================================== -->
+<!-- 4. UNIFIED JAVASCRIPT LOGIC                -->
+<!-- ========================================== -->
+<script>
+  // --- A. SIZE GUIDE DRAWER & UPSELL LOGIC (Scoping globally to prevent conflicts) ---
+  if (typeof window.openSizeChartDrawer !== 'function') {
+    
+    // We use an object to track which specific section's drawer has loaded the upsells yet
+    window._upsellLoadedStates = {};
+
+    window.openSizeChartDrawer = function(sectionId) {
+      var overlay = document.getElementById('SizeChartOverlay-' + sectionId);
+      var drawer = document.getElementById('SizeChartDrawer-' + sectionId);
+      if(!overlay || !drawer) return;
+
+      if (overlay.parentNode !== document.body) {
+        document.body.appendChild(overlay);
+        document.body.appendChild(drawer);
+      }
+      drawer.classList.add('is-open');
+      overlay.classList.add('is-open');
+      document.body.style.overflow = 'hidden'; 
+
+      if(!window._upsellLoadedStates[sectionId]) {
+        window._upsellLoadedStates[sectionId] = true;
+        window.loadSmartUpsells(sectionId);
+      }
+    };
+
+    window.closeSizeChartDrawer = function(sectionId) {
+      var drawer = document.getElementById('SizeChartDrawer-' + sectionId);
+      var overlay = document.getElementById('SizeChartOverlay-' + sectionId);
+      if(drawer) drawer.classList.remove('is-open');
+      if(overlay) overlay.classList.remove('is-open');
+      document.body.style.overflow = ''; 
+    };
+
+    window.loadSmartUpsells = async function(sectionId) {
+      const container = document.getElementById('DrawerUpsellContainer-' + sectionId);
+      const list = document.getElementById('DrawerUpsellList-' + sectionId);
+      if(!container || !list) return;
+
+      const currentProductId = Number(container.getAttribute('data-product-id'));
+      const productTitle = container.getAttribute('data-product-title') || "";
+      const shopifyRoot = (window.Shopify && window.Shopify.routes && window.Shopify.routes.root) ? window.Shopify.routes.root : '/';
+
+      try {
+        let uniqueProducts = [];
+        let seenIds = new Set();
+        seenIds.add(currentProductId); 
+
+        function addProduct(p) {
+          if (!seenIds.has(p.id) && p.available !== false) { 
+            seenIds.add(p.id);
+            let imgUrl = p.featured_image || p.image || (p.images && p.images[0]) || '';
+            uniqueProducts.push({
+              id: p.id, title: p.title, url: p.url, image: imgUrl
+            });
+          }
+        }
+
+        try {
+          const recRes = await fetch(shopifyRoot + `recommendations/products.json?product_id=${currentProductId}&limit=4&intent=related`);
+          if(recRes.ok) {
+            const recData = await recRes.json();
+            if (recData.products) recData.products.forEach(addProduct);
+          }
+        } catch(e) { console.warn('AI Recs skipped.'); }
+
+        if(uniqueProducts.length < 2) {
+          const titleKeywords = productTitle.split(' ').slice(0, 2).join(' ');
+          if(titleKeywords.length > 3) {
+            try {
+              const searchRes = await fetch(shopifyRoot + `search/suggest.json?q=${encodeURIComponent(titleKeywords)}&resources[type]=product&resources[limit]=4`);
+              if(searchRes.ok) {
+                const searchData = await searchRes.json();
+                if (searchData.resources && searchData.resources.results && searchData.resources.results.products) {
+                  searchData.resources.results.products.forEach(addProduct);
+                }
+              }
+            } catch(e) { console.warn('Search fallback skipped.'); }
+          }
+        }
+
+        if (uniqueProducts.length > 0) {
+          const topMatches = uniqueProducts.slice(0, 2); 
+          let htmlString = '';
+          topMatches.forEach(prod => {
+            htmlString += `
+              <a href="${prod.url}" class="drawer-upsell-item">
+                <img src="${prod.image}" alt="${prod.title}" class="drawer-upsell-img" loading="lazy">
+                <div class="drawer-upsell-info">
+                  <h5>${prod.title}</h5>
+                  <span class="drawer-upsell-btn">Shop Now</span>
+                </div>
+              </a>
+            `;
+          });
+          list.innerHTML = htmlString;
+          container.style.display = 'block'; 
+        }
+      } catch (error) {
+        console.error("Drawer Upsell Error:", error);
+      }
+    };
+  }
+
+
+  // --- B. VARIANT PICKER & ZOOM LOGIC (Scoped per section) ---
+  document.addEventListener('DOMContentLoaded', () => {
+    
+    // Zoom logic init (Safely uses section ID)
+    const zoomContainer = document.getElementById('ZoomContainer-{{ section.id }}');
+    const zoomImg = document.getElementById('ZoomImage-{{ section.id }}');
+    if(zoomContainer && zoomImg) {
+      function handleZoom(e) {
+        if(e.cancelable) e.preventDefault();
+        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+        const rect = zoomContainer.getBoundingClientRect();
+        const x = ((clientX - rect.left) / rect.width) * 100;
+        const y = ((clientY - rect.top) / rect.height) * 100;
+        zoomImg.style.transformOrigin = `${x}% ${y}%`;
+      }
+      zoomContainer.addEventListener('mouseenter', function() { zoomImg.classList.add('is-zoomed'); });
+      zoomContainer.addEventListener('mouseleave', function() { zoomImg.classList.remove('is-zoomed'); zoomImg.style.transformOrigin = 'center center'; });
+      zoomContainer.addEventListener('mousemove', handleZoom);
+      zoomContainer.addEventListener('touchstart', function(e) { zoomImg.classList.add('is-zoomed'); handleZoom(e); }, { passive: false });
+      zoomContainer.addEventListener('touchmove', handleZoom, { passive: false });
+      zoomContainer.addEventListener('touchend', function() { zoomImg.classList.remove('is-zoomed'); zoomImg.style.transformOrigin = 'center center'; });
+    }
+
+    // Variant Picker Init
+    const root = document.querySelector('#v-radios-{{ section.id }}');
+    if (!root) return;
+
+    const vDataElement = document.getElementById('V-Data-{{ section.id }}');
+    if (!vDataElement) return;
+    
+    const variants = JSON.parse(vDataElement.textContent);
+    const fieldsets = Array.from(root.querySelectorAll('.variant-input-wrapper'));
+    const btn = document.querySelector('[name="add"]');
+
+    const SIZE_ORDER = [
+      'xxxs', 'xxs', 'xs', 'xxs/xs', 'xs/s', 's', 's/m', 'm', 'm/l', 'l',
+      'l/xl', 'xl', 'xl/xxl', 'xxl', 'xxl/xxxl', 'xxxl', '2xl', '3xl', '4xl', '5xl',
+      'one size', 'os', 'o/s'
+    ];
+    function sizeSortKey(raw) {
+      const v = raw.trim().toLowerCase();
+      if (/^\d+(\.\d+)?$/.test(v)) return [0, parseFloat(v), v];
+      const idx = SIZE_ORDER.indexOf(v);
+      if (idx !== -1) return [1, idx, v];
+      return [2, 0, v];
+    }
+    function sizeCompare(a, b) {
+      const ka = sizeSortKey(a), kb = sizeSortKey(b);
+      if (ka[0] !== kb[0]) return ka[0] - kb[0];
+      if (ka[0] === 2) return ka[2] < kb[2] ? -1 : ka[2] > kb[2] ? 1 : 0;
+      return ka[1] - kb[1];
+    }
+    
+    fieldsets.forEach(fs => {
+      if (fs.dataset.isSize !== 'true') return;
+      
+      const pairs = Array.from(fs.querySelectorAll('input')).map(input => ({
+        input, label: input.nextElementSibling
+      }));
+      pairs.sort((a, b) => sizeCompare(a.input.value, b.input.value));
+      
+      pairs.forEach(({ input, label }) => {
+        fs.appendChild(input);
+        fs.appendChild(label);
+      });
+
+      const sizeGuideBtn = fs.querySelector('.size-guide-trigger');
+      if (sizeGuideBtn) {
+        fs.appendChild(sizeGuideBtn);
+      }
+    });
+
+    const FASHION_COLOR_FALLBACKS = {
+      rosa: '#d9a5a0', caramel: '#af6e4d', strawberry: '#c8102e',
+      khaki: '#c3b091', rust: '#8a3324', sand: '#c2b280', stone: '#a89f91',
+      charcoal: '#36454f', blush: '#de5d83', mocha: '#8b5a44', ivory: '#fffff0'
+    };
+    function isValidCssColor(str) {
+      const probe = new Option().style;
+      probe.color = '';
+      probe.color = str;
+      return probe.color !== '';
+    }
+    root.querySelectorAll('.color__swatch').forEach(label => {
+      const current = label.style.backgroundColor;
+      if (current && !isValidCssColor(current)) {
+        const key = current.trim().toLowerCase();
+        label.style.setProperty('background-color', FASHION_COLOR_FALLBACKS[key] || '#cccccc', 'important');
+      }
+    });
+
+    // Direct variant links (?variant=ID): if the linked variant belongs to a colour that is hidden
+    // because every size of it is sold out, ignore the link so no hidden colour is ever preselected.
+    // The page then behaves like a normal product page load (nothing selected, "Select Options").
+    let hasVariantParam = window.location.search.includes('variant=');
+    const linkColourFs = fieldsets.find(fs => fs.classList.contains('opt-is-color'));
+    if (hasVariantParam && linkColourFs) {
+      const urlParams = new URLSearchParams(window.location.search);
+      const linkedVariant = variants.find(v => String(v.id) === urlParams.get('variant'));
+      if (linkedVariant) {
+        const linkedColour = linkedVariant.options[parseInt(linkColourFs.dataset.index, 10)];
+        const colourIsRendered = Array.from(linkColourFs.querySelectorAll('input')).some(i => i.value === linkedColour);
+        if (!colourIsRendered) {
+          urlParams.delete('variant');
+          const cleanQuery = urlParams.toString();
+          try {
+            window.history.replaceState({}, '', window.location.pathname + (cleanQuery ? '?' + cleanQuery : '') + window.location.hash);
+          } catch (e) {}
+          hasVariantParam = false;
+        }
+      }
+    }
+
+    if (!hasVariantParam) {
+      root.querySelectorAll('input').forEach(i => { i.checked = false; });
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Select Options';
+      }
+    }
+
+    const idxOf = fs => parseInt(fs.dataset.index, 10);
+    const checkedValue = fs => fs.querySelector('input:checked')?.value;
+
+    // Colour availability is deliberately independent of the selected size: a colour fieldset
+    // returns true as soon as ANY size of that colour is available. Size fieldsets still narrow
+    // by the selected colour, so sizes are greyed out (never hidden) as before.
+    function existsFor(fs, value) {
+      const idx = idxOf(fs);
+      const isColorFieldset = fs.classList.contains('opt-is-color');
+      return variants.some(v => {
+        if (v.options[idx] !== value || !v.available) return false;
+        if (isColorFieldset) return true;
+        return fieldsets.every(other => {
+          if (other === fs) return true;
+          const otherVal = checkedValue(other);
+          if (!otherVal) return true;
+          return v.options[idxOf(other)] === otherVal;
+        });
+      });
+    }
+
+    function markAvailability() {
+      fieldsets.forEach(fs => {
+        fs.querySelectorAll('input').forEach(input => {
+          const available = existsFor(fs, input.value);
+          input.nextElementSibling.classList.toggle('state-oos', !available);
+          input.disabled = !available;
+        });
+      });
+    }
+
+    const ONE_SIZE_VALUES = ['one size', 'os', 'o/s'];
+    function pickFallbackSize(inputs) {
+      const oneSize = inputs.find(i => ONE_SIZE_VALUES.includes(i.value.trim().toLowerCase()));
+      return oneSize || inputs[0];
+    }
+
+    function autoSelectSingleColor() {
+      fieldsets.forEach(fs => {
+        if (!fs.classList.contains('opt-is-color')) return;
+        if (fs.querySelector('input:checked')) return;
+        const inputs = Array.from(fs.querySelectorAll('input'));
+        if (inputs.length === 1) {
+          inputs[0].checked = true;
+        }
+      });
+    }
+    autoSelectSingleColor();
+
+    function autoSelectDefaultSize() {
+      fieldsets.forEach(fs => {
+        if (fs.classList.contains('opt-is-color')) return;
+        if (fs.querySelector('input:checked')) return;
+        const inputs = Array.from(fs.querySelectorAll('input'));
+
+        const oneSize = inputs.find(i => ONE_SIZE_VALUES.includes(i.value.trim().toLowerCase()));
+        if (oneSize) { oneSize.checked = true; return; }
+
+        const firstActive = inputs.find(i => existsFor(fs, i.value));
+        if (firstActive) { firstActive.checked = true; return; }
+        const fallback = pickFallbackSize(inputs);
+        if (fallback) fallback.checked = true;
+      });
+    }
+    autoSelectDefaultSize();
+
+    function findPreviewVariant(selections) {
+      const colorFs = fieldsets.find(fs => fs.classList.contains('opt-is-color'));
+      if (!colorFs) return null;
+      const colorValue = checkedValue(colorFs);
+      if (!colorValue) return null;
+      const colorIdx = idxOf(colorFs);
+
+      const hasPhoto = v => v.featured_media || v.featured_image;
+      return variants.find(v => v.options[colorIdx] === colorValue && hasPhoto(v)) || null;
+    }
+
+    function clientHandle(str) {
+      return (str || '').toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    }
+
+    function findGangSlide(gallery, selections) {
+      const colorFs = fieldsets.find(fs => fs.classList.contains('opt-is-color'));
+      const ordered = colorFs ? [colorFs, ...fieldsets.filter(fs => fs !== colorFs)] : fieldsets;
+
+      for (const fs of ordered) {
+        const i = fieldsets.indexOf(fs);
+        const val = selections[i];
+        if (!val) continue;
+        const optionHandle = fs.dataset.optionName || clientHandle(fs.querySelector('legend')?.childNodes[0]?.textContent);
+        const valueHandle = clientHandle(val);
+        const connect = `${optionHandle}_${valueHandle}`;
+        const slide = gallery.querySelector(`[data-gang-connect="${connect}"]`);
+        if (slide) return slide;
+      }
+      return null;
+    }
+
+    function forceLoadSlideImage(gallery, mediaId) {
+      const slide = gallery.querySelector(`[data-media-id="${mediaId}"]`);
+      if (!slide) return;
+      slide.querySelectorAll('img[loading="lazy"]').forEach(img => {
+        img.loading = 'eager';
+        if (img.dataset.src && !img.src) img.src = img.dataset.src;
+      });
+    }
+
+    function syncGalleryImage(selections) {
+      const sectionId = root.dataset.section;
+      const gallery = document.querySelector(`media-gallery#MediaGallery-${sectionId}`);
+      if (!gallery || typeof gallery.setActiveMedia !== 'function') return;
+
+      const variant = findPreviewVariant(selections);
+      const photo = variant && (variant.featured_media || variant.featured_image);
+      if (photo) {
+        const mediaId = `${sectionId}-${photo.id}`;
+        const slide = gallery.querySelector(`[data-media-id="${mediaId}"]`);
+        if (slide) {
+          forceLoadSlideImage(gallery, mediaId);
+          requestAnimationFrame(() => { try { gallery.setActiveMedia(mediaId, false, false); } catch(e){} });
+          return;
+        }
+      }
+
+      const gangSlide = findGangSlide(gallery, selections);
+      if (gangSlide) {
+        const mediaId = gangSlide.dataset.mediaId;
+        forceLoadSlideImage(gallery, mediaId);
+        requestAnimationFrame(() => { try { gallery.setActiveMedia(mediaId, false, false); } catch(e){} });
+        return;
+      }
+    }
+
+    function autoSelectSizeForColor(sourceFs) {
+      if (!sourceFs || !sourceFs.classList.contains('opt-is-color')) return;
+      const colorValue = checkedValue(sourceFs);
+      const colorIdx = idxOf(sourceFs);
+
+      fieldsets.forEach(fs => {
+        if (fs === sourceFs || fs.classList.contains('opt-is-color')) return;
+        const current = fs.querySelector('input:checked');
+        const inputs = Array.from(fs.querySelectorAll('input'));
+
+        const availableInputs = inputs.filter(i => existsFor(fs, i.value));
+        const best = availableInputs.find(i => ONE_SIZE_VALUES.includes(i.value.trim().toLowerCase())) || availableInputs[0];
+          
+        if (best) {
+          if (current !== best) {
+            if (current) current.checked = false;
+            best.checked = true;
+            best.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+          return;
+        }
+
+        const realOptionsForThisColor = inputs.filter(i =>
+          variants.some(v => v.options[idxOf(fs)] === i.value && v.options[colorIdx] === colorValue)
+        );
+        
+        const fallback = realOptionsForThisColor.find(i => ONE_SIZE_VALUES.includes(i.value.trim().toLowerCase())) || realOptionsForThisColor[0] || pickFallbackSize(inputs);
+          
+        if (fallback && fallback !== current) {
+          if (current) current.checked = false;
+          fallback.checked = true;
+          fallback.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+      });
+    }
+
+    function update(sourceFs) {
+      markAvailability();
+      autoSelectSizeForColor(sourceFs);
+
+      fieldsets.forEach(fs => {
+        const span = fs.querySelector('.js-label-text');
+        if (span) span.textContent = checkedValue(fs) || '';
+      });
+
+      const selections = fieldsets.map(checkedValue);
+      const allPicked = selections.every(Boolean);
+      const matchingVariant = allPicked
+        ? variants.find(v => fieldsets.every((fs, i) => v.options[idxOf(fs)] === selections[i]))
+        : null;
+
+      syncGalleryImage(selections);
+
+      if (btn) {
+        if (matchingVariant && matchingVariant.available) {
+          btn.disabled = false;
+          btn.textContent = 'Add to Cart';
+        } else if (allPicked) {
+          btn.disabled = true;
+          btn.textContent = 'Sold Out';
+        } else {
+          btn.disabled = true;
+          btn.textContent = 'Select Options';
+        }
+      }
+    }
+
+    root.addEventListener('change', (e) => {
+      if (e.target.classList.contains('size-guide-trigger')) return;
+      update(e.target.closest('.variant-input-wrapper'));
+    });
+    
+    update();
+  });
+</script>
